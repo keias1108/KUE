@@ -1,0 +1,149 @@
+import React, { useEffect, useState } from 'react';
+import { ReactionDiffusionParams } from './AutomataCanvas';
+
+export interface CodexEntry {
+  id: string;
+  name: string;
+  params: ReactionDiffusionParams;
+  resolution: number;
+  savedAt: string;
+}
+
+interface CodexProps {
+  currentParams: ReactionDiffusionParams;
+  currentResolution: number;
+  onLoad: (entry: CodexEntry) => void;
+}
+
+const STORAGE_KEY = 'personal-universe-codex';
+
+const Codex: React.FC<CodexProps> = ({ currentParams, currentResolution, onLoad }) => {
+  const [entries, setEntries] = useState<CodexEntry[]>([]);
+  const [name, setName] = useState<string>('');
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    try {
+      const raw = window.localStorage.getItem(STORAGE_KEY);
+      if (!raw) {
+        return;
+      }
+      const parsed = JSON.parse(raw) as CodexEntry[];
+      if (Array.isArray(parsed)) {
+        setEntries(parsed);
+      }
+    } catch (error) {
+      console.warn('Failed to parse codex entries', error);
+    }
+  }, []);
+
+  const updateEntries = (updater: (prev: CodexEntry[]) => CodexEntry[]) => {
+    setEntries((prev) => {
+      const next = updater(prev);
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      }
+      return next;
+    });
+  };
+
+  const handleSave = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const trimmed = name.trim();
+    if (!trimmed) {
+      return;
+    }
+    const entry: CodexEntry = {
+      id:
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto
+          ? crypto.randomUUID()
+          : `${Date.now()}`,
+      name: trimmed,
+      params: { ...currentParams },
+      resolution: currentResolution,
+      savedAt: new Date().toISOString(),
+    };
+    updateEntries((prev) => [entry, ...prev]);
+    setName('');
+  };
+
+  const handleDelete = (id: string) => {
+    updateEntries((prev) => prev.filter((entry) => entry.id !== id));
+  };
+
+  const handleLoad = (entry: CodexEntry) => {
+    onLoad(entry);
+  };
+
+  return (
+    <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5 shadow-lg shadow-slate-950/60">
+      <h2 className="text-lg font-semibold text-slate-100">Codex</h2>
+      <p className="mt-1 text-xs text-slate-400">
+        Bookmark compelling parameter DNA and revisit them anytime.
+      </p>
+
+      <form onSubmit={handleSave} className="mt-4 flex gap-2">
+        <input
+          type="text"
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          placeholder="Name this pattern…"
+          className="flex-1 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-indigo-400 focus:outline-none"
+        />
+        <button
+          type="submit"
+          className="rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium text-white shadow shadow-indigo-900/60 transition hover:bg-indigo-400"
+        >
+          Save DNA
+        </button>
+      </form>
+
+      <div className="mt-4 space-y-3">
+        {entries.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-slate-700/60 px-4 py-6 text-center text-xs text-slate-500">
+            No entries yet. Craft a pattern and save it to your Codex.
+          </p>
+        ) : (
+          entries.map((entry) => (
+            <div
+              key={entry.id}
+              className="flex flex-col gap-3 rounded-xl border border-slate-800/70 bg-slate-900/80 p-4 shadow-inner shadow-slate-950/40"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-slate-100">{entry.name}</p>
+                  <p className="text-xs text-slate-500">
+                    {new Date(entry.savedAt).toLocaleString()} · {entry.resolution}²
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleLoad(entry)}
+                    className="rounded-lg bg-emerald-500/90 px-3 py-1 text-xs font-semibold text-white shadow shadow-emerald-900/50 transition hover:bg-emerald-400"
+                  >
+                    Load
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(entry.id)}
+                    className="rounded-lg border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-300 transition hover:border-rose-500 hover:text-rose-300"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+              <div className="text-[11px] font-mono leading-relaxed text-slate-400">
+                du {entry.params.du.toFixed(3)} · dv {entry.params.dv.toFixed(3)} · feed {entry.params.feed.toFixed(3)} · kill {entry.params.kill.toFixed(3)} · dt {entry.params.dt.toFixed(2)} · thresh {entry.params.threshold.toFixed(2)} · contrast {entry.params.contrast.toFixed(2)} · gamma {entry.params.gamma.toFixed(2)} · invert {entry.params.invert ? 'yes' : 'no'}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default Codex;
