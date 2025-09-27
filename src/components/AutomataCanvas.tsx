@@ -1,8 +1,9 @@
-import React, { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
+import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef } from 'react';
 import * as THREE from 'three';
 import { GPUComputationRenderer, Variable } from 'three/examples/jsm/misc/GPUComputationRenderer';
 import computeShader from '../shaders/compute.glsl?raw';
 import displayShader from '../shaders/display.glsl?raw';
+import { computeMetrics, ReactionDiffusionMetrics } from '../utils/metrics';
 
 export interface ReactionDiffusionParams {
   du: number;
@@ -24,6 +25,8 @@ interface AutomataCanvasProps {
 
 export interface AutomataCanvasHandle {
   capture: () => string | null;
+  collectMetrics: () => ReactionDiffusionMetrics | null;
+  resetState: () => void;
 }
 
 const AutomataCanvas = forwardRef<AutomataCanvasHandle, AutomataCanvasProps>(
@@ -37,6 +40,32 @@ const AutomataCanvas = forwardRef<AutomataCanvasHandle, AutomataCanvasProps>(
     const cameraRef = useRef<THREE.OrthographicCamera | null>(null);
     const frameRef = useRef<number>();
     const isRunningRef = useRef<boolean>(isRunning);
+    const previousSampleRef = useRef<Float32Array | null>(null);
+    const resetCounterRef = useRef(0);
+
+    const seedCurrentState = useCallback(
+      (targetTexture: THREE.DataTexture, size: number) => {
+        const data = targetTexture.image.data as Float32Array;
+        const cx = size / 2;
+        const cy = size / 2;
+        const radius = size * 0.12;
+        for (let y = 0; y < size; y += 1) {
+          for (let x = 0; x < size; x += 1) {
+            const idx = (x + y * size) * 4;
+            const dx = x - cx;
+            const dy = y - cy;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const noise = Math.random() * 0.02;
+            data[idx] = 1.0 - noise;
+            data[idx + 1] = dist < radius ? 0.6 + Math.random() * 0.2 : noise;
+            data[idx + 2] = 0.0;
+            data[idx + 3] = 1.0;
+          }
+        }
+        targetTexture.needsUpdate = true;
+      },
+      [],
+    );
 
     useImperativeHandle(ref, () => ({
       capture: () => {
@@ -48,6 +77,69 @@ const AutomataCanvas = forwardRef<AutomataCanvasHandle, AutomataCanvasProps>(
         }
         renderer.render(scene, camera);
         return renderer.domElement.toDataURL('image/png');
+      },
+      collectMetrics: () => {
+        const renderer = rendererRef.current as THREE.WebGLRenderer & {
+          readRenderTargetPixels?: (
+            target: THREE.WebGLRenderTarget,
+            x: number,
+            y: number,
+            width: number,
+            height: number,
+            buffer: Float32Array,
+          ) => void;
+        };
+        const compute = gpuComputeRef.current;
+        const variable = stateVariableRef.current;
+        if (!renderer || !compute || !variable || typeof renderer.readRenderTargetPixels !== 'function') {
+          return null;
+        }
+
+        const renderTarget = compute.getCurrentRenderTarget(variable) as THREE.WebGLRenderTarget | null;
+        if (!renderTarget) {
+          return null;
+        }
+
+        const width = renderTarget.width ?? resolution;
+        const height = renderTarget.height ?? resolution;
+        const buffer = new Float32Array(width * height * 4);
+
+        try {
+          renderer.readRenderTargetPixels(renderTarget, 0, 0, width, height, buffer);
+        } catch (error) {
+          console.warn('Failed to read render target pixels', error);
+          return null;
+        }
+
+        const result = computeMetrics(buffer, width, height, previousSampleRef.current);
+        previousSampleRef.current = result.snapshot;
+        return result.metrics;
+      },
+      resetState: () => {
+        const compute = gpuComputeRef.current;
+        const variable = stateVariableRef.current as Variable & {
+          renderTargets?: THREE.WebGLRenderTarget[];
+        };
+        const renderer = rendererRef.current;
+        if (!compute || !variable || !renderer) {
+          return;
+        }
+
+        const freshTexture = compute.createTexture();
+        seedCurrentState(freshTexture, resolution);
+
+        const targets = variable.renderTargets ?? (variable as unknown as { renderTargets: THREE.WebGLRenderTarget[] }).renderTargets;
+        if (targets) {
+          for (let index = 0; index < targets.length; index += 1) {
+            compute.renderTexture(freshTexture, targets[index]);
+          }
+        }
+
+        if (typeof freshTexture.dispose === 'function') {
+          freshTexture.dispose();
+        }
+        previousSampleRef.current = null;
+        resetCounterRef.current += 1;
       },
     }));
 
@@ -88,27 +180,7 @@ const AutomataCanvas = forwardRef<AutomataCanvasHandle, AutomataCanvasProps>(
       gpuComputeRef.current = gpuCompute;
 
       const texture = gpuCompute.createTexture();
-      const seedInitialState = (dataTexture: THREE.DataTexture, size: number) => {
-        const data = dataTexture.image.data as Float32Array;
-        const cx = size / 2;
-        const cy = size / 2;
-        const radius = size * 0.12;
-        for (let y = 0; y < size; y += 1) {
-          for (let x = 0; x < size; x += 1) {
-            const idx = (x + y * size) * 4;
-            const dx = x - cx;
-            const dy = y - cy;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            const noise = Math.random() * 0.02;
-            data[idx] = 1.0 - noise;
-            data[idx + 1] = dist < radius ? 0.6 + Math.random() * 0.2 : noise;
-            data[idx + 2] = 0.0;
-            data[idx + 3] = 1.0;
-          }
-        }
-        dataTexture.needsUpdate = true;
-      };
-      seedInitialState(texture, resolution);
+      seedCurrentState(texture, resolution);
 
       const stateVariable = gpuCompute.addVariable('textureState', computeShader, texture);
       stateVariableRef.current = stateVariable;
@@ -202,6 +274,7 @@ const AutomataCanvas = forwardRef<AutomataCanvasHandle, AutomataCanvasProps>(
         displayMaterialRef.current = null;
         sceneRef.current = null;
         cameraRef.current = null;
+        previousSampleRef.current = null;
       };
     }, [resolution]);
 

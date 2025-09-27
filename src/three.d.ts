@@ -16,6 +16,15 @@ declare namespace THREE {
     render(scene: Scene, camera: Camera): void;
     dispose(): void;
     forceContextLoss(): void;
+    getRenderTarget(): WebGLRenderTarget | null;
+    readRenderTargetPixels(
+      target: WebGLRenderTarget,
+      x: number,
+      y: number,
+      width: number,
+      height: number,
+      buffer: Float32Array | Uint8Array,
+    ): void;
   }
 
   class Scene {
@@ -50,6 +59,13 @@ declare namespace THREE {
   class DataTexture {
     image: { data: Float32Array };
     needsUpdate: boolean;
+    dispose(): void;
+  }
+
+  class WebGLRenderTarget {
+    width: number;
+    height: number;
+    texture: { [key: string]: unknown };
   }
 }
 
@@ -72,6 +88,7 @@ declare module 'three/examples/jsm/misc/GPUComputationRenderer' {
     compute(): void;
     getCurrentRenderTarget(variable: Variable): { texture: unknown };
     createTexture(): DataTexture;
+    renderTexture(input: DataTexture, target: THREE.WebGLRenderTarget): void;
     dispose?(): void;
   }
 }

@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { forwardRef, useEffect, useImperativeHandle, useState } from 'react';
 import { ReactionDiffusionParams } from './AutomataCanvas';
+import { ReactionDiffusionMetrics } from '../utils/metrics';
 
 export interface CodexEntry {
   id: string;
@@ -7,17 +8,24 @@ export interface CodexEntry {
   params: ReactionDiffusionParams;
   resolution: number;
   savedAt: string;
+  metrics?: ReactionDiffusionMetrics;
 }
 
 interface CodexProps {
   currentParams: ReactionDiffusionParams;
   currentResolution: number;
   onLoad: (entry: CodexEntry) => void;
+  requestMetrics?: () => ReactionDiffusionMetrics | null;
 }
 
 const STORAGE_KEY = 'personal-universe-codex';
 
-const Codex: React.FC<CodexProps> = ({ currentParams, currentResolution, onLoad }) => {
+export interface CodexHandle {
+  addEntry: (entry: CodexEntry) => void;
+}
+
+const Codex = forwardRef<CodexHandle, CodexProps>(
+  ({ currentParams, currentResolution, onLoad, requestMetrics }, ref) => {
   const [entries, setEntries] = useState<CodexEntry[]>([]);
   const [name, setName] = useState<string>('');
 
@@ -49,12 +57,28 @@ const Codex: React.FC<CodexProps> = ({ currentParams, currentResolution, onLoad 
     });
   };
 
+  useImperativeHandle(ref, () => ({
+    addEntry: (entry: CodexEntry) => {
+      const normalised: CodexEntry = {
+        ...entry,
+        id:
+          entry.id ||
+          (typeof crypto !== 'undefined' && 'randomUUID' in crypto
+            ? crypto.randomUUID()
+            : `${Date.now()}`),
+        savedAt: entry.savedAt || new Date().toISOString(),
+      };
+      updateEntries((prev) => [normalised, ...prev]);
+    },
+  }));
+
   const handleSave = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const trimmed = name.trim();
     if (!trimmed) {
       return;
     }
+    const metrics = requestMetrics?.() ?? undefined;
     const entry: CodexEntry = {
       id:
         typeof crypto !== 'undefined' && 'randomUUID' in crypto
@@ -64,6 +88,7 @@ const Codex: React.FC<CodexProps> = ({ currentParams, currentResolution, onLoad 
       params: { ...currentParams },
       resolution: currentResolution,
       savedAt: new Date().toISOString(),
+      metrics,
     };
     updateEntries((prev) => [entry, ...prev]);
     setName('');
@@ -138,12 +163,20 @@ const Codex: React.FC<CodexProps> = ({ currentParams, currentResolution, onLoad 
               <div className="text-[11px] font-mono leading-relaxed text-slate-400">
                 du {entry.params.du.toFixed(3)} · dv {entry.params.dv.toFixed(3)} · feed {entry.params.feed.toFixed(3)} · kill {entry.params.kill.toFixed(3)} · dt {entry.params.dt.toFixed(2)} · thresh {entry.params.threshold.toFixed(2)} · contrast {entry.params.contrast.toFixed(2)} · gamma {entry.params.gamma.toFixed(2)} · invert {entry.params.invert ? 'yes' : 'no'}
               </div>
+              {entry.metrics ? (
+                <div className="text-[11px] font-mono leading-relaxed text-indigo-200/80">
+                  activity {entry.metrics.activity.toFixed(4)} · entropy {entry.metrics.entropy.toFixed(2)} · σu {entry.metrics.stdU.toFixed(3)} · σv {entry.metrics.stdV.toFixed(3)}
+                </div>
+              ) : null}
             </div>
           ))
         )}
       </div>
     </div>
   );
-};
+  },
+);
+
+Codex.displayName = 'Codex';
 
 export default Codex;
