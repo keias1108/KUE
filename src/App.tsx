@@ -10,9 +10,11 @@ import AutoScanResults, {
   SeedFeedbackEntry,
   SeedFeedbackLabel,
 } from './components/AutoScanResults';
+import ParameterHeatmap from './components/ParameterHeatmap';
 import { evaluateParameterSets } from './utils/evaluator';
 import { ReactionDiffusionMetrics, VitalityCategory, assessVitality } from './utils/metrics';
 import { estimateSpecialProbability } from './utils/specialModel';
+import { buildHeatmap } from './utils/heatmap';
 
 const createDefaultParams = (): ReactionDiffusionParams => ({
   du: 0.16,
@@ -34,16 +36,27 @@ const SCAN_BATCH_SIZE = 6;
 const AUTO_SPECIAL_THRESHOLD_DEFAULT = 0.22;
 const AUTO_NORMAL_THRESHOLD_DEFAULT = 0.05;
 
+const NORMALIZED_MANUAL_NORMALS = new Set(['manual-2', 'manual-4', 'manual-5']);
+
 const PARAM_RANGES = {
   du: [0.02, 1.0],
   dv: [0.005, 0.4],
-  feed: [0.01, 0.12],
+  feed: [0.001, 0.12],
   kill: [0.02, 0.08],
   dt: [0.5, 2.0],
   threshold: [0.05, 0.4],
   contrast: [0.8, 5.0],
   gamma: [0.2, 1.5],
 } as const;
+
+const GOLDILOCKS_BAND = {
+  feed: [0.001, 0.1] as const,
+  kill: [0.021, 0.077] as const,
+  dt: [1.3, 1.7] as const,
+  threshold: [0.16, 0.24] as const,
+  contrast: [1.5, 5.0] as const,
+  gamma: [0.2, 1.1] as const,
+};
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 
@@ -56,15 +69,15 @@ const randomNormal = () => {
 const randomBetween = (min: number, max: number) => min + Math.random() * (max - min);
 
 const createRandomParams = (): ReactionDiffusionParams => ({
-  du: randomBetween(0.08, 0.25),
-  dv: randomBetween(0.04, 0.18),
-  feed: randomBetween(0.02, 0.08),
-  kill: randomBetween(0.03, 0.08),
-  dt: randomBetween(0.5, 1.5),
-  threshold: randomBetween(0.1, 0.4),
-  contrast: randomBetween(1.0, 2.5),
-  gamma: randomBetween(0.7, 1.5),
-  invert: Math.random() < 0.5,
+  du: randomBetween(0.05, 0.9),
+  dv: randomBetween(0.01, 0.28),
+  feed: randomBetween(PARAM_RANGES.feed[0], Math.min(0.11, PARAM_RANGES.feed[1])),
+  kill: randomBetween(0.025, Math.min(0.078, PARAM_RANGES.kill[1])),
+  dt: randomBetween(0.7, 1.8),
+  threshold: randomBetween(0.12, 0.32),
+  contrast: randomBetween(1.0, 4.0),
+  gamma: randomBetween(0.3, 1.4),
+  invert: Math.random() < 0.45,
 });
 
 interface SeedFeedbackRecord extends SeedFeedbackEntry {
@@ -106,7 +119,7 @@ const DEFAULT_FEEDBACK_SEEDS: SeedFeedbackRecord[] = [
   },
   {
     id: 'manual-2',
-    label: 'special',
+    label: 'normal',
     notedAt: '2025-09-27T23:27:48.000Z',
     params: {
       du: 0.043,
@@ -160,7 +173,7 @@ const DEFAULT_FEEDBACK_SEEDS: SeedFeedbackRecord[] = [
   },
   {
     id: 'manual-4',
-    label: 'special',
+    label: 'normal',
     notedAt: '2025-09-27T23:22:05.000Z',
     params: {
       du: 0.722,
@@ -187,7 +200,7 @@ const DEFAULT_FEEDBACK_SEEDS: SeedFeedbackRecord[] = [
   },
   {
     id: 'manual-5',
-    label: 'special',
+    label: 'normal',
     notedAt: '2025-09-27T23:19:10.000Z',
     params: {
       du: 0.621,
@@ -356,6 +369,7 @@ const [autoScanState, setAutoScanState] = useState<{
 const canvasRef = useRef<AutomataCanvasHandle>(null);
 const codexRef = useRef<CodexHandle>(null);
 const canvasSectionRef = useRef<HTMLDivElement>(null);
+  const [codexEntries, setCodexEntries] = useState<CodexEntry[]>([]);
   const [specialFilterState, setSpecialFilterState] = useState<{
     enabled: boolean;
     threshold: number;
@@ -370,7 +384,10 @@ const canvasSectionRef = useRef<HTMLDivElement>(null);
   const FEEDBACK_STORAGE_KEY = 'personal-universe-feedback';
   const createInitialFeedback = () => {
     const base = DEFAULT_FEEDBACK_SEEDS.reduce<Record<string, SeedFeedbackRecord>>((acc, entry) => {
-      acc[entry.id] = entry;
+      const normalized = NORMALIZED_MANUAL_NORMALS.has(entry.id)
+        ? { ...entry, label: 'normal' as SeedFeedbackLabel }
+        : entry;
+      acc[normalized.id] = normalized;
       return acc;
     }, {});
 
@@ -385,7 +402,10 @@ const canvasSectionRef = useRef<HTMLDivElement>(null);
       }
       const parsed = JSON.parse(raw) as Array<SeedFeedbackRecord & { id: string }>;
       return parsed.reduce<Record<string, SeedFeedbackRecord>>((acc, entry) => {
-        acc[entry.id] = { ...entry };
+        const normalized = NORMALIZED_MANUAL_NORMALS.has(entry.id)
+          ? { ...entry, label: 'normal' as SeedFeedbackLabel }
+          : entry;
+        acc[normalized.id] = { ...normalized };
         return acc;
       }, base);
     } catch (error) {
@@ -395,6 +415,45 @@ const canvasSectionRef = useRef<HTMLDivElement>(null);
   };
 
   const [seedFeedback, setSeedFeedback] = useState<Record<string, SeedFeedbackRecord>>(createInitialFeedback);
+
+  useEffect(() => {
+    setSeedFeedback((prev) => {
+      const next = { ...prev };
+      const codexIds = new Set(codexEntries.map((entry) => `codex-${entry.id}`));
+
+      Object.keys(next).forEach((id) => {
+        if (id.startsWith('codex-') && !codexIds.has(id)) {
+          delete next[id];
+        }
+      });
+
+      codexEntries.forEach((entry) => {
+        const id = `codex-${entry.id}`;
+        const metrics = entry.metrics ?? {
+          meanU: 0,
+          meanV: 0,
+          stdU: 0,
+          stdV: 0,
+          activity: 0,
+          entropy: 0,
+        };
+        const vitality = assessVitality(metrics);
+        next[id] = {
+          id,
+          label: 'special',
+          notedAt: entry.savedAt,
+          params: entry.params,
+          metrics,
+          classification: vitality.classification,
+          score: vitality.score,
+          source: 'manual',
+          note: entry.note,
+        };
+      });
+
+      return next;
+    });
+  }, [codexEntries]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -484,6 +543,30 @@ const canvasSectionRef = useRef<HTMLDivElement>(null);
     [specialFilterState.enabled, specialFilterState.threshold],
   );
 
+  const sampleGoldilocks = useCallback((): ReactionDiffusionParams => {
+    const jittered = (range: readonly [number, number], jitter = 0.15) => {
+      const span = range[1] - range[0];
+      if (span <= 0) {
+        return range[0];
+      }
+      const base = randomBetween(range[0], range[1]);
+      const offset = randomNormal() * span * jitter;
+      return clamp(base + offset, range[0], range[1]);
+    };
+
+    return {
+      du: clamp(randomBetween(0.04, 0.95), PARAM_RANGES.du[0], PARAM_RANGES.du[1]),
+      dv: clamp(randomBetween(0.009, 0.32), PARAM_RANGES.dv[0], PARAM_RANGES.dv[1]),
+      feed: jittered(GOLDILOCKS_BAND.feed, 0.1),
+      kill: jittered(GOLDILOCKS_BAND.kill, 0.1),
+      dt: clamp(jittered(GOLDILOCKS_BAND.dt, 0.25), PARAM_RANGES.dt[0], PARAM_RANGES.dt[1]),
+      threshold: clamp(jittered(GOLDILOCKS_BAND.threshold, 0.35), PARAM_RANGES.threshold[0], PARAM_RANGES.threshold[1]),
+      contrast: clamp(jittered(GOLDILOCKS_BAND.contrast, 0.2), PARAM_RANGES.contrast[0], PARAM_RANGES.contrast[1]),
+      gamma: clamp(jittered(GOLDILOCKS_BAND.gamma, 0.25), PARAM_RANGES.gamma[0], PARAM_RANGES.gamma[1]),
+      invert: Math.random() > 0.18 ? false : Math.random() < 0.5,
+    };
+  }, []);
+
   const sampleAround = useCallback((params: ReactionDiffusionParams): ReactionDiffusionParams => {
     const scale = 0.12; // perturbation scale relative to parameter range
     return {
@@ -535,15 +618,20 @@ const canvasSectionRef = useRef<HTMLDivElement>(null);
     const specials = DEFAULT_FEEDBACK_SEEDS.filter((seed) => seed.label === 'special').concat(
       Object.values(seedFeedback).filter((entry) => entry.label === 'special'),
     );
-    const useBiased = specials.length >= 5 && Math.random() < 0.65;
-    if (useBiased) {
+    const sampleRoll = Math.random();
+
+    if (sampleRoll < 0.5) {
+      return sampleGoldilocks();
+    }
+
+    if (specials.length >= 5 && sampleRoll < 0.85) {
       const base = specials[Math.floor(Math.random() * specials.length)];
       if (base) {
         return sampleAround(base.params);
       }
     }
     return createRandomParams();
-  }, [sampleAround, seedFeedback]);
+  }, [sampleAround, sampleGoldilocks, seedFeedback]);
 
   const autoTagItem = useCallback(
     (item: AutoScanItem) => {
@@ -737,6 +825,49 @@ const canvasSectionRef = useRef<HTMLDivElement>(null);
   }, [seedFeedback]);
 
   const feedbackSummary = useMemo(() => mapFeedbackSummary(seedFeedback), [seedFeedback]);
+
+  const manualSpecialRecords = useMemo(
+    () => Object.values(seedFeedback).filter((entry) => entry.source === 'manual' && entry.label === 'special'),
+    [seedFeedback],
+  );
+
+  const handleCodexEntriesChange = useCallback((entries: CodexEntry[]) => {
+    setCodexEntries(entries);
+  }, []);
+
+  const taggedSpecialRecords = useMemo(
+    () => Object.values(seedFeedback).filter((entry) => entry.label === 'special'),
+    [seedFeedback],
+  );
+
+  const manualSpecialHeatmap = useMemo(
+    () =>
+      buildHeatmap(
+        manualSpecialRecords,
+        { key: 'feed', label: 'feed', min: GOLDILOCKS_BAND.feed[0], max: GOLDILOCKS_BAND.feed[1], bins: 6 },
+        { key: 'kill', label: 'kill', min: GOLDILOCKS_BAND.kill[0], max: GOLDILOCKS_BAND.kill[1], bins: 6 },
+      ),
+    [manualSpecialRecords],
+  );
+
+  const contrastGammaHeatmap = useMemo(
+    () =>
+      buildHeatmap(
+        taggedSpecialRecords,
+        { key: 'contrast', label: 'contrast', min: GOLDILOCKS_BAND.contrast[0], max: GOLDILOCKS_BAND.contrast[1], bins: 6 },
+        { key: 'gamma', label: 'gamma', min: GOLDILOCKS_BAND.gamma[0], max: GOLDILOCKS_BAND.gamma[1], bins: 6 },
+      ),
+    [taggedSpecialRecords],
+  );
+
+  const manualSpecialCount = manualSpecialRecords.length;
+  const taggedSpecialCount = taggedSpecialRecords.length;
+  const manualHeatmapNote = manualSpecialHeatmap
+    ? `feed ${GOLDILOCKS_BAND.feed[0].toFixed(3)}~${GOLDILOCKS_BAND.feed[1].toFixed(3)} · kill ${GOLDILOCKS_BAND.kill[0].toFixed(3)}~${GOLDILOCKS_BAND.kill[1].toFixed(3)}`
+    : undefined;
+  const contrastGammaNote = contrastGammaHeatmap
+    ? `contrast ${GOLDILOCKS_BAND.contrast[0].toFixed(1)}~${GOLDILOCKS_BAND.contrast[1].toFixed(1)} · gamma ${GOLDILOCKS_BAND.gamma[0].toFixed(1)}~${GOLDILOCKS_BAND.gamma[1].toFixed(1)}`
+    : undefined;
 
   const visibleAutoScanResults = useMemo(() => {
     if (focusUndecidedOnly) {
@@ -1040,9 +1171,27 @@ const canvasSectionRef = useRef<HTMLDivElement>(null);
                   currentResolution={resolution}
                   onLoad={handleLoadEntry}
                   requestMetrics={requestMetrics}
+                  onEntriesChange={handleCodexEntriesChange}
                 />
               </div>
             </section>
+          </div>
+        </div>
+
+        <div className="mx-auto mt-6 w-full max-w-[1600px]">
+          <div className="grid gap-4 lg:grid-cols-2">
+            <ParameterHeatmap
+              title="Manual Special 분포"
+              subtitle={`manual special ${manualSpecialCount}건 기준 feed × kill`}
+              highlightNote={manualHeatmapNote}
+              data={manualSpecialHeatmap}
+            />
+            <ParameterHeatmap
+              title="Special 대비·감마"
+              subtitle={`special 태그 ${taggedSpecialCount}건 기준 contrast × gamma`}
+              highlightNote={contrastGammaNote}
+              data={contrastGammaHeatmap}
+            />
           </div>
         </div>
       </main>

@@ -9,6 +9,7 @@ export interface CodexEntry {
   resolution: number;
   savedAt: string;
   metrics?: ReactionDiffusionMetrics;
+  note?: string;
 }
 
 interface CodexProps {
@@ -16,6 +17,7 @@ interface CodexProps {
   currentResolution: number;
   onLoad: (entry: CodexEntry) => void;
   requestMetrics?: () => ReactionDiffusionMetrics | null;
+  onEntriesChange?: (entries: CodexEntry[]) => void;
 }
 
 const STORAGE_KEY = 'personal-universe-codex';
@@ -25,9 +27,10 @@ export interface CodexHandle {
 }
 
 const Codex = forwardRef<CodexHandle, CodexProps>(
-  ({ currentParams, currentResolution, onLoad, requestMetrics }, ref) => {
+  ({ currentParams, currentResolution, onLoad, requestMetrics, onEntriesChange }, ref) => {
   const [entries, setEntries] = useState<CodexEntry[]>([]);
   const [name, setName] = useState<string>('');
+  const [noteDraft, setNoteDraft] = useState<string>('');
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -41,11 +44,12 @@ const Codex = forwardRef<CodexHandle, CodexProps>(
       const parsed = JSON.parse(raw) as CodexEntry[];
       if (Array.isArray(parsed)) {
         setEntries(parsed);
+        onEntriesChange?.(parsed);
       }
     } catch (error) {
       console.warn('Failed to parse codex entries', error);
     }
-  }, []);
+  }, [onEntriesChange]);
 
   const updateEntries = (updater: (prev: CodexEntry[]) => CodexEntry[]) => {
     setEntries((prev) => {
@@ -53,6 +57,7 @@ const Codex = forwardRef<CodexHandle, CodexProps>(
       if (typeof window !== 'undefined') {
         window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
       }
+      onEntriesChange?.(next);
       return next;
     });
   };
@@ -89,9 +94,11 @@ const Codex = forwardRef<CodexHandle, CodexProps>(
       resolution: currentResolution,
       savedAt: new Date().toISOString(),
       metrics,
+      note: noteDraft.trim() || undefined,
     };
     updateEntries((prev) => [entry, ...prev]);
     setName('');
+    setNoteDraft('');
   };
 
   const handleDelete = (id: string) => {
@@ -102,6 +109,20 @@ const Codex = forwardRef<CodexHandle, CodexProps>(
     onLoad(entry);
   };
 
+  const handleNoteChange = (id: string, value: string) => {
+    const trimmed = value.trim();
+    updateEntries((prev) =>
+      prev.map((entry) =>
+        entry.id === id
+          ? {
+              ...entry,
+              note: trimmed.length > 0 ? value : undefined,
+            }
+          : entry,
+      ),
+    );
+  };
+
   return (
     <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5 shadow-lg shadow-slate-950/60">
       <h2 className="text-lg font-semibold text-slate-100">Codex</h2>
@@ -109,20 +130,29 @@ const Codex = forwardRef<CodexHandle, CodexProps>(
         Bookmark compelling parameter DNA and revisit them anytime.
       </p>
 
-      <form onSubmit={handleSave} className="mt-4 flex gap-2">
-        <input
-          type="text"
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          placeholder="Name this pattern…"
-          className="flex-1 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-indigo-400 focus:outline-none"
+      <form onSubmit={handleSave} className="mt-4 space-y-3">
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="이 패턴의 이름"
+            className="flex-1 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-indigo-400 focus:outline-none"
+          />
+          <button
+            type="submit"
+            className="rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium text-white shadow shadow-indigo-900/60 transition hover:bg-indigo-400"
+          >
+            Save DNA
+          </button>
+        </div>
+        <textarea
+          value={noteDraft}
+          onChange={(event) => setNoteDraft(event.target.value)}
+          placeholder="메모를 남겨 두세요 (예: 두 겹 호흡, 육각 균열 등)"
+          rows={2}
+          className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-indigo-400 focus:outline-none"
         />
-        <button
-          type="submit"
-          className="rounded-lg bg-indigo-500 px-4 py-2 text-sm font-medium text-white shadow shadow-indigo-900/60 transition hover:bg-indigo-400"
-        >
-          Save DNA
-        </button>
       </form>
 
       <div className="mt-4 space-y-3">
@@ -168,6 +198,16 @@ const Codex = forwardRef<CodexHandle, CodexProps>(
                   activity {entry.metrics.activity.toFixed(4)} · entropy {entry.metrics.entropy.toFixed(2)} · σu {entry.metrics.stdU.toFixed(3)} · σv {entry.metrics.stdV.toFixed(3)}
                 </div>
               ) : null}
+              <div>
+                <label className="text-[11px] uppercase tracking-wide text-indigo-300">Memo</label>
+                <textarea
+                  value={entry.note ?? ''}
+                  onChange={(event) => handleNoteChange(entry.id, event.target.value)}
+                  rows={2}
+                  placeholder="무엇이 특별했는지 기록하세요"
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:border-indigo-400 focus:outline-none"
+                />
+              </div>
             </div>
           ))
         )}

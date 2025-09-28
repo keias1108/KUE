@@ -39,7 +39,7 @@ const sliderConfigs: Array<{
     key: 'feed',
     label: 'Feed Rate',
     min: 0.0,
-    max: 0.1,
+    max: 0.12,
     step: 0.0005,
     description: 'Input feed of chemical U.',
   },
