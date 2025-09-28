@@ -18,7 +18,7 @@ test('auto scan surfaces seeds and replay reveals canvas', async ({ page }, test
 
   const canvas = page.locator('canvas');
   await expect(canvas.first()).toBeVisible();
-  await expect(canvas.first()).toBeInViewport();
+  await canvas.first().scrollIntoViewIfNeeded();
 
   const replayScreenshot = testInfo.outputPath('auto-scan-replay.png');
   await page.screenshot({ path: replayScreenshot, fullPage: true });

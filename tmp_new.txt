@@ -1,0 +1,46 @@
+        <aside className="flex w-full flex-col gap-4 lg:w-[320px] lg:flex-none">
+          <div className="rounded-2xl border border-slate-800/70 bg-slate-900/85 p-4 shadow-xl shadow-slate-950/40">
+            <div className="mb-4">
+              <p className="text-xs uppercase tracking-wide text-indigo-300">Controls</p>
+              <h2 className="text-lg font-semibold text-slate-100">Rule Panel</h2>
+            </div>
+            <RuleControls
+              params={params}
+              onParamsChange={handleParamsChange}
+              resolution={resolution}
+              resolutionOptions={resolutionOptions}
+              onResolutionChange={handleResolutionChange}
+            />
+          </div>
+
+          <div className="rounded-2xl border border-indigo-800/60 bg-slate-900/85 p-4 shadow-xl shadow-indigo-950/40">
+            <div className="mb-4">
+              <p className="text-xs uppercase tracking-wide text-indigo-300">Automated Seeds</p>
+              <h2 className="text-lg font-semibold text-indigo-100">Queue</h2>
+            </div>
+            <AutoScanResults
+              items={autoScanState.results}
+              onAdopt={handleAdoptSeed}
+              onDiscard={handleDiscardSeed}
+              onReplay={handleReplaySeed}
+              isProcessing={autoScanState.running}
+              className="max-h-[40vh] overflow-y-auto border-none bg-transparent p-0 shadow-none"
+              title=""
+              subtitle=""
+            />
+          </div>
+
+          <div className="rounded-2xl border border-slate-800/70 bg-slate-900/85 p-4 shadow-xl shadow-slate-950/40">
+            <div className="mb-4">
+              <p className="text-xs uppercase tracking-wide text-indigo-300">Saved DNA</p>
+              <h2 className="text-lg font-semibold text-slate-100">Codex</h2>
+            </div>
+            <Codex
+              ref={codexRef}
+              currentParams={params}
+              currentResolution={resolution}
+              onLoad={handleLoadEntry}
+              requestMetrics={requestMetrics}
+            />
+          </div>
+        </aside>

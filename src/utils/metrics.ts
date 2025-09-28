@@ -14,7 +14,7 @@ interface MetricsResult {
 
 const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
 
-export type VitalityCategory = 'balanced' | 'dormant' | 'chaotic';
+export type VitalityCategory = 'balanced' | 'dormant' | 'chaotic' | 'structured';
 
 export interface VitalityAssessment {
   classification: VitalityCategory;
@@ -102,18 +102,29 @@ export const assessVitality = (metrics: ReactionDiffusionMetrics): VitalityAsses
   const entropy = metrics.entropy;
 
   let classification: VitalityCategory;
-  if (activity < 0.003 || avgStd < 0.01 || entropy < 0.5) {
-    classification = 'dormant';
-  } else if (activity > 0.12 || avgStd > 0.25 || entropy > 4.2) {
+  const structuredCandidate = avgStd > 0.15 || entropy > 0.8;
+
+  if (activity < 0.006) {
+    classification = structuredCandidate ? 'structured' : 'dormant';
+  } else if (activity > 0.14 || avgStd > 0.32 || entropy > 4.4) {
     classification = 'chaotic';
+  } else if (avgStd < 0.03 || entropy < 0.7) {
+    classification = 'dormant';
   } else {
     classification = 'balanced';
   }
 
-  const activityScore = clamp01((activity - 0.003) / 0.08);
-  const entropyScore = 1 - clamp01(Math.abs(entropy - 2.4) / 2.0);
-  const stdScore = 1 - clamp01(Math.abs(avgStd - 0.08) / 0.07);
-  const composite = clamp01(0.5 * activityScore + 0.3 * entropyScore + 0.2 * stdScore);
+  let composite: number;
+  if (classification === 'structured') {
+    const entropyScore = clamp01((entropy - 0.6) / 2.2);
+    const textureScore = clamp01((avgStd - 0.15) / 0.25);
+    composite = clamp01(0.65 * entropyScore + 0.35 * textureScore);
+  } else {
+    const activityScore = clamp01((activity - 0.006) / 0.09);
+    const entropyScore = 1 - clamp01(Math.abs(entropy - 2.4) / 2.0);
+    const stdScore = 1 - clamp01(Math.abs(avgStd - 0.1) / 0.08);
+    composite = clamp01(0.5 * activityScore + 0.3 * entropyScore + 0.2 * stdScore);
+  }
 
   return {
     classification,

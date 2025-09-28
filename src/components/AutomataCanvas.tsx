@@ -21,6 +21,7 @@ interface AutomataCanvasProps {
   params: ReactionDiffusionParams;
   resolution: number;
   isRunning: boolean;
+  stepsPerFrame: number;
 }
 
 export interface AutomataCanvasHandle {
@@ -30,7 +31,7 @@ export interface AutomataCanvasHandle {
 }
 
 const AutomataCanvas = forwardRef<AutomataCanvasHandle, AutomataCanvasProps>(
-  ({ params, resolution, isRunning }, ref) => {
+  ({ params, resolution, isRunning, stepsPerFrame }, ref) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
     const gpuComputeRef = useRef<GPUComputationRenderer | null>(null);
@@ -42,6 +43,7 @@ const AutomataCanvas = forwardRef<AutomataCanvasHandle, AutomataCanvasProps>(
     const isRunningRef = useRef<boolean>(isRunning);
     const previousSampleRef = useRef<Float32Array | null>(null);
     const resetCounterRef = useRef(0);
+    const stepsPerFrameRef = useRef<number>(Math.max(1, Math.floor(stepsPerFrame)));
 
     const seedCurrentState = useCallback(
       (targetTexture: THREE.DataTexture, size: number) => {
@@ -148,6 +150,10 @@ const AutomataCanvas = forwardRef<AutomataCanvasHandle, AutomataCanvasProps>(
     }, [isRunning]);
 
     useEffect(() => {
+      stepsPerFrameRef.current = Math.max(1, Math.floor(stepsPerFrame));
+    }, [stepsPerFrame]);
+
+    useEffect(() => {
       const container = containerRef.current;
       if (!container) {
         return;
@@ -243,7 +249,10 @@ const AutomataCanvas = forwardRef<AutomataCanvasHandle, AutomataCanvasProps>(
         }
 
         if (isRunningRef.current) {
-          compute.compute();
+          const iterations = stepsPerFrameRef.current;
+          for (let index = 0; index < iterations; index += 1) {
+            compute.compute();
+          }
         }
 
         material.uniforms.textureState.value = compute.getCurrentRenderTarget(variable).texture;

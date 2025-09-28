@@ -9,8 +9,6 @@ interface RuleControlsProps {
   resolution: number;
   resolutionOptions: number[];
   onResolutionChange: (resolution: number) => void;
-  isRunning: boolean;
-  onToggleRun: () => void;
 }
 
 const sliderConfigs: Array<{
@@ -93,8 +91,6 @@ const RuleControls: React.FC<RuleControlsProps> = ({
   resolution,
   resolutionOptions,
   onResolutionChange,
-  isRunning,
-  onToggleRun,
 }) => {
   const handleSliderChange =
     (key: NumericParamKey) => (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -111,26 +107,8 @@ const RuleControls: React.FC<RuleControlsProps> = ({
   };
 
   return (
-    <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-5 shadow-lg shadow-slate-950/60">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-lg font-semibold text-slate-100">Rule Controls</h2>
-        <button
-          type="button"
-          onClick={onToggleRun}
-          className={`rounded-full px-4 py-1 text-xs font-semibold tracking-wide ${
-            isRunning
-              ? 'bg-rose-500/90 text-white shadow shadow-rose-900/60 hover:bg-rose-400'
-              : 'bg-emerald-500/90 text-white shadow shadow-emerald-900/60 hover:bg-emerald-400'
-          }`}
-        >
-          {isRunning ? 'Pause' : 'Run'}
-        </button>
-      </div>
-      <p className="mt-1 text-xs text-slate-400">
-        Sculpt the reaction-diffusion DNA to discover new living textures.
-      </p>
-
-      <div className="mt-4 space-y-4">
+    <div className="space-y-4">
+      <div className="space-y-4">
         {sliderConfigs.map((config) => {
           const value = params[config.key];
           return (
@@ -158,7 +136,7 @@ const RuleControls: React.FC<RuleControlsProps> = ({
         })}
       </div>
 
-      <div className="mt-5 flex items-center justify-between gap-3 rounded-xl border border-slate-800/70 bg-slate-900/70 px-4 py-3">
+      <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-800/70 bg-slate-900/70 px-4 py-3">
         <div>
           <p className="text-sm font-medium text-slate-100">Invert palette</p>
           <p className="text-xs text-slate-500">Flip light and dark regions after tonemapping.</p>
@@ -174,7 +152,7 @@ const RuleControls: React.FC<RuleControlsProps> = ({
         </label>
       </div>
 
-      <div className="mt-5 flex items-center justify-between gap-3 rounded-xl border border-slate-800/70 bg-slate-900/70 px-4 py-3">
+      <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-800/70 bg-slate-900/70 px-4 py-3">
         <div>
           <p className="text-sm font-medium text-slate-100">Resolution</p>
           <p className="text-xs text-slate-500">
