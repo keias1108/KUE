@@ -103,7 +103,9 @@ const AutoScanResults: React.FC<AutoScanResultsProps> = ({
       <div className="mt-4 space-y-3">
         {items.length === 0 ? (
           <p className="rounded-lg border border-dashed border-indigo-800/60 px-4 py-6 text-center text-xs text-indigo-200/70">
-            No automated seeds yet. Run a scan to populate the queue.
+            {filterEnabled
+              ? '특이도 필터 조건을 낮추거나 새 스캔을 실행해 보세요.'
+              : 'No automated seeds yet. Run a scan to populate the queue.'}
           </p>
         ) : (
           items.map((item) => {

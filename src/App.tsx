@@ -28,6 +28,30 @@ const createDefaultParams = (): ReactionDiffusionParams => ({
 
 const resolutionOptions = [256, 384, 512, 768, 1024];
 const speedOptions = [1, 2, 4, 8];
+const TARGET_QUEUE_SIZE = 50;
+const MAX_SCAN_BATCHES = 12;
+const SCAN_BATCH_SIZE = 6;
+const AUTO_SPECIAL_THRESHOLD_DEFAULT = 0.22;
+const AUTO_NORMAL_THRESHOLD_DEFAULT = 0.05;
+
+const PARAM_RANGES = {
+  du: [0.02, 1.0],
+  dv: [0.005, 0.4],
+  feed: [0.01, 0.12],
+  kill: [0.02, 0.08],
+  dt: [0.5, 2.0],
+  threshold: [0.05, 0.4],
+  contrast: [0.8, 5.0],
+  gamma: [0.2, 1.5],
+} as const;
+
+const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+
+const randomNormal = () => {
+  const u1 = Math.random();
+  const u2 = Math.random();
+  return Math.sqrt(-2 * Math.log(Math.max(u1, Number.EPSILON))) * Math.cos(2 * Math.PI * u2);
+};
 
 const randomBetween = (min: number, max: number) => min + Math.random() * (max - min);
 
@@ -49,7 +73,7 @@ interface SeedFeedbackRecord extends SeedFeedbackEntry {
   metrics: ReactionDiffusionMetrics;
   classification: VitalityCategory;
   score: number;
-  source: 'auto-scan' | 'manual';
+  source: 'auto-scan' | 'manual' | 'auto-tag';
 }
 
 const DEFAULT_FEEDBACK_SEEDS: SeedFeedbackRecord[] = [
@@ -304,7 +328,7 @@ interface SeedFeedbackRecord extends SeedFeedbackEntry {
   metrics: ReactionDiffusionMetrics;
   classification: VitalityCategory;
   score: number;
-  source: 'auto-scan' | 'manual';
+  source: 'auto-scan' | 'manual' | 'auto-tag';
 }
 
 const mapFeedbackSummary = (
@@ -335,8 +359,14 @@ const canvasSectionRef = useRef<HTMLDivElement>(null);
   const [specialFilterState, setSpecialFilterState] = useState<{
     enabled: boolean;
     threshold: number;
-  }>({ enabled: false, threshold: 0.15 });
+  }>({ enabled: false, threshold: 0.2 });
 
+  const [autoTagState, setAutoTagState] = useState({
+    enabled: true,
+    specialThreshold: AUTO_SPECIAL_THRESHOLD_DEFAULT,
+    normalThreshold: AUTO_NORMAL_THRESHOLD_DEFAULT,
+  });
+  const [focusUndecidedOnly, setFocusUndecidedOnly] = useState(false);
   const FEEDBACK_STORAGE_KEY = 'personal-universe-feedback';
   const createInitialFeedback = () => {
     const base = DEFAULT_FEEDBACK_SEEDS.reduce<Record<string, SeedFeedbackRecord>>((acc, entry) => {
@@ -448,15 +478,113 @@ const canvasSectionRef = useRef<HTMLDivElement>(null);
     [],
   );
 
-  const applySpecialFilter = useCallback(
-    (items: AutoScanItem[]) => {
-      const normalized = items.map((item) => normalizeAutoScanItem(item));
-      if (!specialFilterState.enabled) {
-        return normalized;
+  const passesFilter = useCallback(
+    (item: AutoScanItem) =>
+      !specialFilterState.enabled || (item.specialLikelihood ?? 0) >= specialFilterState.threshold,
+    [specialFilterState.enabled, specialFilterState.threshold],
+  );
+
+  const sampleAround = useCallback((params: ReactionDiffusionParams): ReactionDiffusionParams => {
+    const scale = 0.12; // perturbation scale relative to parameter range
+    return {
+      du: clamp(
+        params.du + randomNormal() * (PARAM_RANGES.du[1] - PARAM_RANGES.du[0]) * scale,
+        PARAM_RANGES.du[0],
+        PARAM_RANGES.du[1],
+      ),
+      dv: clamp(
+        params.dv + randomNormal() * (PARAM_RANGES.dv[1] - PARAM_RANGES.dv[0]) * scale,
+        PARAM_RANGES.dv[0],
+        PARAM_RANGES.dv[1],
+      ),
+      feed: clamp(
+        params.feed + randomNormal() * (PARAM_RANGES.feed[1] - PARAM_RANGES.feed[0]) * scale,
+        PARAM_RANGES.feed[0],
+        PARAM_RANGES.feed[1],
+      ),
+      kill: clamp(
+        params.kill + randomNormal() * (PARAM_RANGES.kill[1] - PARAM_RANGES.kill[0]) * scale,
+        PARAM_RANGES.kill[0],
+        PARAM_RANGES.kill[1],
+      ),
+      dt: clamp(
+        params.dt + randomNormal() * (PARAM_RANGES.dt[1] - PARAM_RANGES.dt[0]) * scale,
+        PARAM_RANGES.dt[0],
+        PARAM_RANGES.dt[1],
+      ),
+      threshold: clamp(
+        params.threshold + randomNormal() * (PARAM_RANGES.threshold[1] - PARAM_RANGES.threshold[0]) * scale,
+        PARAM_RANGES.threshold[0],
+        PARAM_RANGES.threshold[1],
+      ),
+      contrast: clamp(
+        params.contrast + randomNormal() * (PARAM_RANGES.contrast[1] - PARAM_RANGES.contrast[0]) * scale,
+        PARAM_RANGES.contrast[0],
+        PARAM_RANGES.contrast[1],
+      ),
+      gamma: clamp(
+        params.gamma + randomNormal() * (PARAM_RANGES.gamma[1] - PARAM_RANGES.gamma[0]) * scale,
+        PARAM_RANGES.gamma[0],
+        PARAM_RANGES.gamma[1],
+      ),
+      invert: Math.random() < 0.7 ? params.invert : Math.random() < 0.5,
+    };
+  }, []);
+
+  const generateCandidateParams = useCallback((): ReactionDiffusionParams => {
+    const specials = DEFAULT_FEEDBACK_SEEDS.filter((seed) => seed.label === 'special').concat(
+      Object.values(seedFeedback).filter((entry) => entry.label === 'special'),
+    );
+    const useBiased = specials.length >= 5 && Math.random() < 0.65;
+    if (useBiased) {
+      const base = specials[Math.floor(Math.random() * specials.length)];
+      if (base) {
+        return sampleAround(base.params);
       }
-      return normalized.filter((item) => (item.specialLikelihood ?? 0) >= specialFilterState.threshold);
+    }
+    return createRandomParams();
+  }, [sampleAround, seedFeedback]);
+
+  const autoTagItem = useCallback(
+    (item: AutoScanItem) => {
+      if (!autoTagState.enabled) {
+        return;
+      }
+      const likelihood = item.specialLikelihood ?? estimateSpecialProbability(item.metrics, item.params);
+      const label: SeedFeedbackLabel | null =
+        likelihood >= autoTagState.specialThreshold
+          ? 'special'
+          : likelihood <= autoTagState.normalThreshold
+            ? 'normal'
+            : null;
+      if (!label) {
+        return;
+      }
+      setSeedFeedback((prev) => {
+        const existing = prev[item.id];
+        if (existing && existing.source !== 'auto-tag') {
+          return prev;
+        }
+        if (existing && existing.label === label && existing.source === 'auto-tag') {
+          return prev;
+        }
+        return {
+          ...prev,
+          [item.id]: {
+            id: item.id,
+            label,
+            notedAt: new Date().toISOString(),
+            params: item.params,
+            metrics: item.metrics,
+            classification: item.classification,
+            score: item.score,
+            source: 'auto-tag',
+            note: existing?.note,
+          },
+        };
+      });
     },
-    [normalizeAutoScanItem, specialFilterState.enabled, specialFilterState.threshold],
+    [autoTagState.enabled, autoTagState.normalThreshold, autoTagState.specialThreshold],
   );
 
   const handleAutoScan = useCallback(async () => {
@@ -464,48 +592,73 @@ const canvasSectionRef = useRef<HTMLDivElement>(null);
       return;
     }
 
-    const candidates = Array.from({ length: 6 }, () => createRandomParams());
-    setAutoScanState((prev) => ({ ...prev, running: true, progress: 0 }));
+    const existingNormalized = autoScanState.results.map((item) => normalizeAutoScanItem(item));
+    const initialVisible = existingNormalized.filter(passesFilter).length;
+    if (initialVisible >= TARGET_QUEUE_SIZE) {
+      setAutoScanState((prev) => ({ ...prev, running: false, progress: 1, results: existingNormalized }));
+      return;
+    }
 
-    const results = await evaluateParameterSets(candidates, {
-      resolution: 128,
-      iterations: 240,
-      sampleInterval: 40,
-      onProgress: (index, total) => {
-        if (total === 0) {
-          return;
-        }
-        setAutoScanState((prev) => ({ ...prev, progress: index / total }));
-      },
-    });
+    const requiredBatches = Math.max(
+      1,
+      Math.ceil((TARGET_QUEUE_SIZE - initialVisible) / SCAN_BATCH_SIZE),
+    );
 
-    const timestamp = Date.now();
-    const newEntries = results.map<AutoScanItem>((entry, idx) => {
-      const vitality = assessVitality(entry.average);
-      return {
-        id: `${timestamp}-${idx}`,
-        params: entry.params,
-        metrics: entry.average,
-        classification: vitality.classification,
-        vitalityScore: vitality.score,
-        specialLikelihood: estimateSpecialProbability(entry.average, entry.params),
-        score: vitality.score,
-      };
-    });
+    setAutoScanState((prev) => ({ ...prev, running: true, progress: 0, results: existingNormalized }));
 
-    setAutoScanState((prev) => ({
-      running: false,
-      progress: 1,
-      results: applySpecialFilter([...prev.results, ...newEntries]).sort((a, b) => b.score - a.score),
-    }));
-  }, [applySpecialFilter, assessVitality, autoScanState.running]);
+    let combinedResults = [...existingNormalized];
+    let visibleCount = initialVisible;
 
-  useEffect(() => {
-    setAutoScanState((prev) => ({
-      ...prev,
-      results: applySpecialFilter(prev.results).sort((a, b) => b.score - a.score),
-    }));
-  }, [applySpecialFilter, specialFilterState.enabled, specialFilterState.threshold]);
+    for (let batchIndex = 0; batchIndex < Math.min(requiredBatches, MAX_SCAN_BATCHES); batchIndex += 1) {
+      const candidates = Array.from({ length: SCAN_BATCH_SIZE }, () => generateCandidateParams());
+      // eslint-disable-next-line no-await-in-loop
+      const results = await evaluateParameterSets(candidates, {
+        resolution: 128,
+        iterations: 240,
+        sampleInterval: 40,
+        onProgress: (index, total) => {
+          if (total === 0) {
+            return;
+          }
+          const fraction = (batchIndex + index / total) / requiredBatches;
+          setAutoScanState((prev) => ({ ...prev, progress: Math.min(1, fraction) }));
+        },
+      });
+
+      const timestamp = Date.now();
+      const normalizedBatch = results.map<AutoScanItem>((entry, idx) => {
+        const vitality = assessVitality(entry.average);
+        return normalizeAutoScanItem({
+          id: `${timestamp}-${batchIndex}-${idx}`,
+          params: entry.params,
+          metrics: entry.average,
+          classification: vitality.classification,
+          vitalityScore: vitality.score,
+          specialLikelihood: estimateSpecialProbability(entry.average, entry.params),
+          score: vitality.score,
+        });
+      });
+
+      combinedResults = [...combinedResults, ...normalizedBatch].sort((a, b) => b.score - a.score);
+      visibleCount = combinedResults.filter(passesFilter).length;
+
+      normalizedBatch.forEach(autoTagItem);
+
+      if (visibleCount >= TARGET_QUEUE_SIZE) {
+        break;
+      }
+    }
+
+    setAutoScanState({ running: false, progress: 1, results: combinedResults });
+  }, [
+    assessVitality,
+    autoScanState.results,
+    autoScanState.running,
+    autoTagItem,
+    generateCandidateParams,
+    normalizeAutoScanItem,
+    passesFilter,
+  ]);
 
   const requestMetrics = useCallback(() => canvasRef.current?.collectMetrics() ?? null, []);
 
@@ -585,7 +738,35 @@ const canvasSectionRef = useRef<HTMLDivElement>(null);
 
   const feedbackSummary = useMemo(() => mapFeedbackSummary(seedFeedback), [seedFeedback]);
 
+  const visibleAutoScanResults = useMemo(() => {
+    if (focusUndecidedOnly) {
+      return autoScanState.results.filter((item) => {
+        const likelihood = item.specialLikelihood ?? estimateSpecialProbability(item.metrics, item.params);
+        return likelihood > autoTagState.normalThreshold && likelihood < autoTagState.specialThreshold;
+      });
+    }
+    if (specialFilterState.enabled) {
+      return autoScanState.results.filter((item) => passesFilter(item));
+    }
+    return autoScanState.results;
+  }, [
+    autoScanState.results,
+    autoTagState.normalThreshold,
+    autoTagState.specialThreshold,
+    focusUndecidedOnly,
+    passesFilter,
+    specialFilterState.enabled,
+  ]);
+
+  useEffect(() => {
+    if (!autoTagState.enabled) {
+      return;
+    }
+    autoScanState.results.forEach(autoTagItem);
+  }, [autoScanState.results, autoTagItem, autoTagState.enabled, autoTagState.normalThreshold, autoTagState.specialThreshold]);
+
   const handleToggleSpecialFilter = () => {
+    setFocusUndecidedOnly(false);
     setSpecialFilterState((prev) => ({ ...prev, enabled: !prev.enabled }));
   };
 
@@ -746,6 +927,73 @@ const canvasSectionRef = useRef<HTMLDivElement>(null);
                           className="h-1 w-20 cursor-pointer accent-sky-400"
                         />
                       </div>
+                      </div>
+                    <div className="flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2">
+                      <label className="flex items-center gap-2 text-[11px] font-semibold text-amber-100">
+                        <input
+                          type="checkbox"
+                          checked={focusUndecidedOnly}
+                          onChange={() => {
+                            setSpecialFilterState((prev) => ({ ...prev, enabled: false }));
+                            setFocusUndecidedOnly((prev) => !prev);
+                          }}
+                          className="h-3 w-3 rounded border-amber-500/70 bg-slate-900 text-amber-400 focus:ring-amber-500"
+                        />
+                        헷갈리는 구간만 보기
+                      </label>
+                      <span className="text-[10px] text-amber-200">
+                        {autoTagState.normalThreshold.toFixed(2)}{' < likelihood < '}
+                        {autoTagState.specialThreshold.toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2">
+                      <label className="flex items-center gap-2 text-[11px] font-semibold text-emerald-100">
+                        <input
+                          type="checkbox"
+                          checked={autoTagState.enabled}
+                          onChange={() => setAutoTagState((prev) => ({ ...prev, enabled: !prev.enabled }))}
+                          className="h-3 w-3 rounded border-emerald-500/70 bg-slate-900 text-emerald-400 focus:ring-emerald-500"
+                        />
+                        자동 태깅
+                      </label>
+                      <div className="flex flex-col gap-1 text-[10px] text-emerald-200">
+                        <label className="flex items-center gap-1">
+                          <span>특이 ≥ {autoTagState.specialThreshold.toFixed(2)}</span>
+                          <input
+                            type="range"
+                            min={0.1}
+                            max={0.6}
+                            step={0.01}
+                            value={autoTagState.specialThreshold}
+                            onChange={(event) =>
+                              setAutoTagState((prev) => ({
+                                ...prev,
+                                specialThreshold: parseFloat(event.target.value),
+                              }))
+                            }
+                            disabled={!autoTagState.enabled}
+                            className="h-1 w-20 cursor-pointer accent-emerald-400"
+                          />
+                        </label>
+                        <label className="flex items-center gap-1">
+                          <span>평범 ≤ {autoTagState.normalThreshold.toFixed(2)}</span>
+                          <input
+                            type="range"
+                            min={0}
+                            max={0.2}
+                            step={0.01}
+                            value={autoTagState.normalThreshold}
+                            onChange={(event) =>
+                              setAutoTagState((prev) => ({
+                                ...prev,
+                                normalThreshold: parseFloat(event.target.value),
+                              }))
+                            }
+                            disabled={!autoTagState.enabled}
+                            className="h-1 w-20 cursor-pointer accent-emerald-400"
+                          />
+                        </label>
+                      </div>
                     </div>
                     <button
                       type="button"
@@ -763,7 +1011,7 @@ const canvasSectionRef = useRef<HTMLDivElement>(null);
                 </div>
                 <div className="max-h-[320px] overflow-y-auto pr-1">
                   <AutoScanResults
-                    items={autoScanState.results}
+                    items={visibleAutoScanResults}
                     onAdopt={handleAdoptSeed}
                     onDiscard={handleDiscardSeed}
                     onReplay={handleReplaySeed}
